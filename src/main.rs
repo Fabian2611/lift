@@ -1,13 +1,45 @@
 use bore_cli::client::Client;
+use clap::Parser;
 use rand::distr::SampleString;
-use std::env;
 use std::io::Read;
 use std::process;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::oneshot;
-use warp::Filter;
 use warp::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use warp::reply::Reply;
+use warp::Filter;
+
+#[derive(Parser, Debug)]
+#[command(name = "lift", version, about, long_about = None)]
+struct Args {
+    /// Transfer the target as a downloadable file instead of rendering as HTML/text
+    #[arg(short = 'f')]
+    file_mode: bool,
+
+    /// The path to the file to share. If omitted, reads text from stdin
+    #[arg(value_name = "FILENAME")]
+    filename: Option<String>,
+
+    /// How often the file can be accessed before the link expires
+    #[arg(
+        value_name = "MAX_COUNT",
+        short = 'c',
+        long = "count",
+        default_value = "1"
+    )]
+    max_count: u32,
+
+    /// The time in seconds after which lift terminates and the link expires, by default never
+    #[arg(
+        value_name = "TIMEOUT",
+        short = 't',
+        long = "time",
+        default_value = "0"
+    )]
+    max_time: u64,
+}
 
 enum Payload {
     Text(String),
@@ -18,13 +50,15 @@ fn random_path() -> String {
     rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 8)
 }
 
-async fn serve(payload: Payload) {
+async fn serve(payload: Payload, max_count: u32, max_seconds: u64) {
     let r = random_path();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let local_port = listener.local_addr().unwrap().port();
 
-    let client = Client::new("localhost", local_port, "bore.pub", 0, None).await.expect("Failed to create bore");
+    let client = Client::new("localhost", local_port, "bore.pub", 0, None)
+        .await
+        .expect("Failed to create bore");
     let remote_port = client.remote_port();
 
     tokio::spawn(async move {
@@ -35,6 +69,8 @@ async fn serve(payload: Payload) {
 
     let (tx, rx) = oneshot::channel::<()>();
     let tx_mx = Arc::new(Mutex::new(Some(tx)));
+    let counter = Arc::new(AtomicU32::new(max_count));
+
     let r_filter = r.clone();
 
     let payload = Arc::new(payload);
@@ -44,28 +80,41 @@ async fn serve(payload: Payload) {
             let payload = payload.clone();
             let tx_mx = tx_mx.clone();
             let r_filter = r_filter.clone();
+            let counter = counter.clone();
+
             async move {
                 if seg != r_filter {
                     return Err(warp::reject::not_found());
                 }
 
-                if let Ok(mut guard) = tx_mx.lock() {
-                    if let Some(sender) = guard.take() {
-                        let _ = sender.send(());
+                let current = counter.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |val| {
+                    if val > 0 { Some(val - 1) } else { None }
+                });
+
+                match current {
+                    Ok(prev) if prev == 1 => {
+                        if let Ok(mut guard) = tx_mx.lock() {
+                            if let Some(sender) = guard.take() {
+                                let _ = sender.send(());
+                            }
+                        }
                     }
+                    Err(_) | Ok(0) => {
+                        return Err(warp::reject::not_found());
+                    }
+                    _ => {}
                 }
 
                 let response = match &*payload {
-                    Payload::File { bytes, filename } => {
-                        warp::http::Response::builder()
-                            .header(CONTENT_TYPE, "application/octet-stream")
-                            .header(
-                                CONTENT_DISPOSITION,
-                                format!("attachment; filename=\"{}\"", filename),
-                            )
-                            .body(bytes.clone())
-                            .unwrap().into_response()
-                    }
+                    Payload::File { bytes, filename } => warp::http::Response::builder()
+                        .header(CONTENT_TYPE, "application/octet-stream")
+                        .header(
+                            CONTENT_DISPOSITION,
+                            format!("attachment; filename=\"{}\"", filename),
+                        )
+                        .body(bytes.clone())
+                        .unwrap()
+                        .into_response(),
                     Payload::Text(html_string) => {
                         warp::reply::html(html_string.clone()).into_response()
                     }
@@ -75,14 +124,35 @@ async fn serve(payload: Payload) {
         });
 
     println!("Data available at http://bore.pub:{}/{}", remote_port, r);
+    
+    if max_seconds > 0 {
+        println!("Expires after {} download(s) or {} second(s).", max_count, max_seconds);
+    } else {
+        println!("Expires after {} download(s).", max_count);
+    }
 
-    warp::serve(route)
-        .incoming(listener)
-        .graceful(async move {
-            let _ = rx.await;
-        })
-        .run()
-        .await;
+    let run = async move {
+        warp::serve(route)
+            .incoming(listener)
+            .graceful(async move {
+                let _ = rx.await;
+                println!("Maximum request count reached, closing remote.")
+            })
+            .run()
+            .await;
+    };
+
+    if max_seconds > 0 {
+        let res = tokio::time::timeout(Duration::from_secs(max_seconds), run).await;
+        if res.is_err() {
+            println!(
+                "Timeout of {} seconds reached, closing remote.",
+                max_seconds
+            );
+        }
+    } else {
+        run.await;
+    }
 }
 
 fn from_stdin() -> String {
@@ -107,47 +177,27 @@ fn extract_filename(path: &str) -> String {
 
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = env::args().collect();
+    let args = Args::parse();
 
-    let payload = match args.len() {
-        1 => Payload::Text(from_stdin()),
-        2 => {
-            if args[1] == "-f" {
+    let payload = match args.filename {
+        None => {
+            if args.file_mode {
                 eprintln!("Error: Missing filename after -f");
                 process::exit(1);
             }
-            if args[1] == "--version" {
-                println!("lift v{}", env!("CARGO_PKG_VERSION"));
-                process::exit(0);
-            }
-            if args[1] == "--help" || args[1] == "-h" {
-                println!("Usage: lift [-f filename | filename]");
-                println!("Subcommands:");
-                println!("  --help: display this help message");
-                println!("  --version: display the program version");
-                println!("If no file path is specified, read from stdin.");
-                println!("[-f]ile mode makes it so instead of presenting your data as text / html, \
-                it is transferred as a downloadable file.");
-                process::exit(0);
-            }
-            Payload::Text(std::fs::read_to_string(&args[1]).expect("Failed to read text file"))
+            Payload::Text(from_stdin())
         }
-        3 => {
-            if args[1] == "-f" {
-                let bytes = from_file_bytes(&args[2]);
-                let filename = extract_filename(&args[2]);
+        Some(path) => {
+            if args.file_mode {
+                let bytes = from_file_bytes(&path);
+                let filename = extract_filename(&path);
                 Payload::File { bytes, filename }
             } else {
-                eprintln!("Usage: lift [-f filename | filename]");
-                process::exit(1);
+                let text = std::fs::read_to_string(&path).expect("Failed to read text file");
+                Payload::Text(text)
             }
-        }
-        _ => {
-            eprintln!("Usage: lift [-f filename | filename]");
-            eprintln!("Try lift --help for more information.");
-            process::exit(1);
         }
     };
 
-    serve(payload).await;
+    serve(payload, args.max_count, args.max_time).await;
 }
