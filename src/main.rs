@@ -6,7 +6,7 @@ use std::process;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::oneshot;
+use tokio::sync::mpsc;
 use warp::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use warp::reply::Reply;
 use warp::Filter;
@@ -39,6 +39,14 @@ struct Args {
         default_value = "0"
     )]
     max_time: u64,
+
+    #[arg(
+        value_name = "REMOTE",
+        short = 'r',
+        long = "remote",
+        default_value = "bore.pub"
+    )]
+    bore_remote: String,
 }
 
 enum Payload {
@@ -50,13 +58,13 @@ fn random_path() -> String {
     rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 8)
 }
 
-async fn serve(payload: Payload, max_count: u32, max_seconds: u64) {
+async fn serve(payload: Payload, max_count: u32, max_seconds: u64, bore_remote: String) {
     let r = random_path();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let local_port = listener.local_addr().unwrap().port();
 
-    let client = Client::new("localhost", local_port, "bore.pub", 0, None)
+    let client = Client::new("localhost", local_port, &bore_remote, 0, None)
         .await
         .expect("Failed to create bore");
     let remote_port = client.remote_port();
@@ -67,13 +75,13 @@ async fn serve(payload: Payload, max_count: u32, max_seconds: u64) {
         }
     });
 
-    let (tx, rx) = oneshot::channel::<()>();
+    let (tx, mut rx) = mpsc::channel::<()>(1);
     let tx_mx = Arc::new(Mutex::new(Some(tx)));
     let counter = Arc::new(AtomicU32::new(max_count));
 
     let r_filter = r.clone();
-
     let payload = Arc::new(payload);
+
     let route = warp::path::param::<String>()
         .and(warp::path::end())
         .and_then(move |seg: String| {
@@ -92,17 +100,19 @@ async fn serve(payload: Payload, max_count: u32, max_seconds: u64) {
                 });
 
                 match current {
-                    Ok(prev) if prev == 1 => {
-                        if let Ok(mut guard) = tx_mx.lock() {
-                            if let Some(sender) = guard.take() {
-                                let _ = sender.send(());
-                            }
+                    Err(_) => return Err(warp::reject::not_found()),
+                    Ok(prev) => {
+                        if prev == 1 {
+                            let tx_mx = tx_mx.clone();
+                            tokio::spawn(async move {
+                                if let Ok(mut guard) = tx_mx.lock() {
+                                    if let Some(sender) = guard.take() {
+                                        let _ = sender.send(());
+                                    }
+                                }
+                            });
                         }
                     }
-                    Err(_) | Ok(0) => {
-                        return Err(warp::reject::not_found());
-                    }
-                    _ => {}
                 }
 
                 let response = match &*payload {
@@ -123,10 +133,16 @@ async fn serve(payload: Payload, max_count: u32, max_seconds: u64) {
             }
         });
 
-    println!("Data available at http://bore.pub:{}/{}", remote_port, r);
-    
+    println!(
+        "Data available at http://{}:{}/{}",
+        bore_remote, remote_port, r
+    );
+
     if max_seconds > 0 {
-        println!("Expires after {} download(s) or {} second(s).", max_count, max_seconds);
+        println!(
+            "Expires after {} download(s) or {} second(s).",
+            max_count, max_seconds
+        );
     } else {
         println!("Expires after {} download(s).", max_count);
     }
@@ -135,7 +151,7 @@ async fn serve(payload: Payload, max_count: u32, max_seconds: u64) {
         warp::serve(route)
             .incoming(listener)
             .graceful(async move {
-                let _ = rx.await;
+                let _ = rx.recv().await;
                 println!("Maximum request count reached, closing remote.")
             })
             .run()
@@ -199,5 +215,5 @@ async fn main() {
         }
     };
 
-    serve(payload, args.max_count, args.max_time).await;
+    serve(payload, args.max_count, args.max_time, args.bore_remote).await;
 }

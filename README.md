@@ -12,6 +12,7 @@ The available options are:
 * `-f` - file mode
 * `-c, --count <MAX_COUNT>` - how often the link may be accessed before it expires [default: 1]
 * `-t, --time <TIMEOUT>` - the time in seconds after which the link expires [default: 0 / never]
+* `-r, --remote <REMOTE>` - the bore remote to use [default: "bore.pub"]
 
 By default, `lift` reads from standard input. This means you can run it without any parameters like so:
 ```
@@ -46,6 +47,14 @@ the file will be downloaded (or displayed by the default file handler) instead o
 
 `lift` will terminate and the link will become useless after the file has been accessed `MAX_COUNT` times, or the
 `TIMEOUT` has elapsed.
+
+A full example:
+```
+$ lift -c 2 -t 120 -r "bore.pub" -f panda.png
+```
+
+This will host `panda.png` as a downloadable file, which can be downloaded a maximum of two times and will expire after
+2 minutes (120 seconds). The bore tunnel will be the "bore.pub" server.
 
 ## Build
 `lift` is written in Rust 1.94.1, although the MSRV (minimum supported rust version) is likely way lower.
