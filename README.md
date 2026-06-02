@@ -6,7 +6,12 @@ machine, so that you don't have to keep any ports permanently open. Neither bore
 copy of your data.
 
 ## Usage
-Usage: `lift [-f filename | filename]`
+Usage: `lift [OPTIONS] [FILENAME]`
+
+The available options are:
+* `-f` - file mode
+* `-c, --count <MAX_COUNT>` - how often the link may be accessed before it expires [default: 1]
+* `-t, --time <TIMEOUT>` - the time in seconds after which the link expires [default: 0 / never]
 
 By default, `lift` reads from standard input. This means you can run it without any parameters like so:
 ```
@@ -39,7 +44,8 @@ Data available at http://bore.pub:12345/a1b2c3d4
 Opening it in your browser (or requesting the data using tools such as `wget`) reveals your data. When `-f` was used,
 the file will be downloaded (or displayed by the default file handler) instead of rendered as text in your browser.
 
-After a single access, `lift` will terminate on your machine and the link will become useless.
+`lift` will terminate and the link will become useless after the file has been accessed `MAX_COUNT` times, or the
+`TIMEOUT` has elapsed.
 
 ## Build
 `lift` is written in Rust 1.94.1, although the MSRV (minimum supported rust version) is likely way lower.
