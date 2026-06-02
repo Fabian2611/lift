@@ -50,7 +50,7 @@ the file will be downloaded (or displayed by the default file handler) instead o
 ## Build
 `lift` is written in Rust 1.94.1, although the MSRV (minimum supported rust version) is likely way lower.
 It depends on the [warp](https://crates.io/crates/warp), [tokio](https://crates.io/crates/tokio),
-[rand](https://crates.io/crates/rand) and [bore-cli](https://crates.io/crates/bore-cli) crates. You need to have a
+[rand](https://crates.io/crates/rand), [bore-cli](https://crates.io/crates/bore-cli) and [clap](https://crates.io/crates/clap) crates. You need to have a
 [Rust](https://rust-lang.org) installed on your system in order to build `lift`.
 
 To build `lift` yourself, clone this repository, then run `cargo build --release`. Your resulting binary will be located
