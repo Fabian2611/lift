@@ -14,11 +14,11 @@ We simply `lift` an image we want to share...
 
 ![img.png](img.png)
 
-pass the URL to our friend, who will type it into his browser or fetch it...
+pass the URL to our friend, who will type it into their browser or fetch it...
 
 ![img_1.png](img_1.png)
 
-and can then see the cute image we sent him!
+and can then see the cute image we sent them!
 
 ![img_2.png](img_2.png)
 (Credits for the cat go to <cataas.com>)
