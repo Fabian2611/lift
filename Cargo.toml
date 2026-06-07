@@ -5,7 +5,7 @@ edition = "2024"
 description = "Serverless file sharing for maximum security"
 readme = "README.md"
 repository = "https://github.com/Fabian2611/lift"
-license = "AGPL-3"
+license = "AGPL-3.0-or-later"
 keywords = ["network", "file-sharing", "files", "transfer"]
 categories = ["command-line-utilities"]
 
