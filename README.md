@@ -7,6 +7,7 @@ machine, so that you don't have to keep any ports permanently open. Neither bore
 copy of your data.
 
 ## Showcase
+
 We simply `lift` an image we want to share...
 ![img.png](img.png)
 
@@ -17,9 +18,16 @@ and can then see the cute image we sent him!
 ![img_2.png](img_2.png)
 (Credits for the cat go to <cataas.com>)
 
-
 I personally use lift whenever I would've previously used limewire or similar services, because now the data always
 stays on my own device, and I don't have to trust any external server provider with it.
+
+## Installation
+
+If you have [cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html) already installed, just run
+`cargo install lifter`. Sadly, `lift` was already taken as a crate name on crates.io.
+
+Otherwise, either [build](#build) it yourself, or get one of
+the [pre-built binaries](https://github.com/Fabian2611/lift/releases).
 
 ## Usage
 
