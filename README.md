@@ -6,6 +6,21 @@ The only outside connection made is to [bore.pub](https://github.com/ekzhang/bor
 machine, so that you don't have to keep any ports permanently open. Neither bore nor any other server will ever have a
 copy of your data.
 
+## Showcase
+We simply `lift` an image we want to share...
+![img.png](img.png)
+
+pass the URL to our friend, who will type it into his browser or fetch it...
+![img_1.png](img_1.png)
+
+and can then see the cute image we sent him!
+![img_2.png](img_2.png)
+(Credits for the cat go to <cataas.com>)
+
+
+I personally use lift whenever I would've previously used limewire or similar services, because now the data always
+stays on my own device, and I don't have to trust any external server provider with it.
+
 ## Usage
 
 Usage: `lift [OPTIONS] [FILENAME]`
