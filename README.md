@@ -6,7 +6,7 @@ The only outside connection made is to [bore.pub](https://github.com/ekzhang/bor
 machine, so that you don't have to keep any ports permanently open. Neither bore nor any other server will ever have a
 copy of your data.
 
-Only the sender needs to install `lift` - it will look like any normal URL to the receiver.
+Only the sender needs to install `lift` - the receiver can access it from a normal URL, directly in their web browser.
 
 ## Showcase
 
