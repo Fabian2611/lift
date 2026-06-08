@@ -1,15 +1,25 @@
+use axum::{
+    body::Body,
+    extract::Path,
+    http::{
+        header::{CONTENT_DISPOSITION, CONTENT_TYPE}, HeaderValue,
+        StatusCode,
+    },
+    response::Response,
+    routing::get,
+    Router,
+};
 use bore_cli::client::Client;
 use clap::Parser;
+use futures_util::StreamExt;
 use rand::distr::SampleString;
 use std::io::Read;
 use std::process;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use warp::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
-use warp::reply::Reply;
-use warp::Filter;
+use tokio::sync::Notify;
+use tokio_util::io::ReaderStream;
 
 #[derive(Parser, Debug)]
 #[command(name = "lift", version, about, long_about = None)]
@@ -40,6 +50,7 @@ struct Args {
     )]
     max_time: u64,
 
+    /// The bore server to use
     #[arg(
         value_name = "REMOTE",
         short = 'r',
@@ -68,70 +79,78 @@ async fn serve(payload: Payload, max_count: u32, max_seconds: u64, bore_remote: 
         .await
         .expect("Failed to create bore");
     let remote_port = client.remote_port();
+    tokio::spawn(async move { client.listen().await });
 
-    tokio::spawn(async move {
-        if let Err(e) = client.listen().await {
-            eprintln!("Bore tunnel error: {:?}", e);
-        }
-    });
-
-    let (tx, mut rx) = mpsc::channel::<()>(1);
-    let tx_mx = Arc::new(Mutex::new(Some(tx)));
+    let shutdown = Arc::new(Notify::new());
     let counter = Arc::new(AtomicU32::new(max_count));
-
-    let r_filter = r.clone();
     let payload = Arc::new(payload);
 
-    let route = warp::path::param::<String>()
-        .and(warp::path::end())
-        .and_then(move |seg: String| {
-            let payload = payload.clone();
-            let tx_mx = tx_mx.clone();
-            let r_filter = r_filter.clone();
-            let counter = counter.clone();
+    let app = Router::new().route(
+        "/{seg}",
+        get({
+            let path = r.clone();
+            let shutdown = shutdown.clone();
 
-            async move {
-                if seg != r_filter {
-                    return Err(warp::reject::not_found());
-                }
+            move |Path(seg): Path<String>| {
+                let path = path.clone();
+                let payload = payload.clone();
+                let counter = counter.clone();
+                let shutdown = shutdown.clone();
 
-                let current = counter.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |val| {
-                    if val > 0 { Some(val - 1) } else { None }
-                });
+                async move {
+                    if seg != path {
+                        return Err(StatusCode::NOT_FOUND);
+                    }
 
-                match current {
-                    Err(_) => return Err(warp::reject::not_found()),
-                    Ok(prev) => {
-                        if prev == 1 {
-                            let tx_mx = tx_mx.clone();
-                            tokio::spawn(async move {
-                                if let Ok(mut guard) = tx_mx.lock() {
-                                    if let Some(sender) = guard.take() {
-                                        let _ = sender.send(());
-                                    }
+                    let prev = counter.try_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                        if v > 0 { Some(v - 1) } else { None }
+                    });
+
+                    let prev = match prev {
+                        Err(_) => return Err(StatusCode::NOT_FOUND),
+                        Ok(val) => val,
+                    };
+
+                    Ok(match &*payload {
+                        Payload::File { bytes, filename } => {
+                            let bytes = bytes.clone();
+                            let stream = async_stream::stream! {
+                                let cursor = std::io::Cursor::new(bytes);
+                                let mut reader = ReaderStream::new(cursor);
+                                while let Some(chunk) = reader.next().await {
+                                    yield chunk;
                                 }
-                            });
+                                if prev == 1 {
+                                    shutdown.notify_one();
+                                }
+                            };
+                            Response::builder()
+                                .header(CONTENT_TYPE, "application/octet-stream")
+                                .header(
+                                    CONTENT_DISPOSITION,
+                                    HeaderValue::from_str(&format!(
+                                        "attachment; filename=\"{}\"",
+                                        filename
+                                    ))
+                                    .unwrap(),
+                                )
+                                .body(Body::from_stream(stream))
+                                .unwrap()
                         }
-                    }
+                        Payload::Text(text) => {
+                            if prev == 1 {
+                                shutdown.notify_one();
+                            }
+                            Response::builder()
+                                .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                                .body(Body::from(text.clone()))
+                                .unwrap()
+                        }
+                    })
                 }
-
-                let response = match &*payload {
-                    Payload::File { bytes, filename } => warp::http::Response::builder()
-                        .header(CONTENT_TYPE, "application/octet-stream")
-                        .header(
-                            CONTENT_DISPOSITION,
-                            format!("attachment; filename=\"{}\"", filename),
-                        )
-                        .body(bytes.clone())
-                        .unwrap()
-                        .into_response(),
-                    Payload::Text(html_string) => {
-                        warp::reply::html(html_string.clone()).into_response()
-                    }
-                };
-                Ok::<_, warp::Rejection>(response)
             }
-        });
+        }),
+    );
 
     println!(
         "Data available at http://{}:{}/{}",
@@ -140,55 +159,47 @@ async fn serve(payload: Payload, max_count: u32, max_seconds: u64, bore_remote: 
 
     if max_seconds > 0 {
         println!(
-            "Expires after {} download(s) or {} second(s).",
+            "Expires after {} download(s) or {}s.",
             max_count, max_seconds
         );
     } else {
         println!("Expires after {} download(s).", max_count);
     }
 
-    let run = async move {
-        warp::serve(route)
-            .incoming(listener)
-            .graceful(async move {
-                let _ = rx.recv().await;
-                println!("Maximum request count reached, closing remote.")
-            })
-            .run()
-            .await;
-    };
+    let run = axum::serve(listener, app).with_graceful_shutdown(async move {
+        shutdown.notified().await;
+        println!(
+            "Maximum request count of {} reached, not accepting further connections.",
+            max_count
+        );
+    });
 
     if max_seconds > 0 {
-        let res = tokio::time::timeout(Duration::from_secs(max_seconds), run).await;
-        if res.is_err() {
+        if tokio::time::timeout(Duration::from_secs(max_seconds), run)
+            .await
+            .is_err()
+        {
             println!(
-                "Timeout of {} seconds reached, closing remote.",
+                "Timeout of {}s reached, not accepting further connections.",
                 max_seconds
             );
+            return;
         }
     } else {
-        run.await;
+        run.await.unwrap();
     }
+
+    // extra time for tcp buffer to clear, as we only know that the buffer was transferred to OS
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    println!("Transfer complete, closing remote.");
 }
 
 fn from_stdin() -> String {
-    let mut data = String::new();
+    let mut s = String::new();
     std::io::stdin()
-        .read_to_string(&mut data)
-        .expect("Failed to read from stdin");
-    data
-}
-
-fn from_file_bytes(path: &str) -> Vec<u8> {
-    std::fs::read(path).expect("Failed to read file bytes")
-}
-
-fn extract_filename(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned()
+        .read_to_string(&mut s)
+        .expect("Failed to read stdin");
+    s
 }
 
 #[tokio::main]
@@ -198,19 +209,35 @@ async fn main() {
     let payload = match args.filename {
         None => {
             if args.file_mode {
-                eprintln!("Error: Missing filename after -f");
+                eprintln!("Error: -f requires a filename");
                 process::exit(1);
             }
             Payload::Text(from_stdin())
         }
         Some(path) => {
             if args.file_mode {
-                let bytes = from_file_bytes(&path);
-                let filename = extract_filename(&path);
-                Payload::File { bytes, filename }
+                Payload::File {
+                    bytes: match std::fs::read(&path) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            eprintln!("Error: {}", e);
+                            process::exit(1);
+                        }
+                    },
+                    filename: std::path::Path::new(&path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                }
             } else {
-                let text = std::fs::read_to_string(&path).expect("Failed to read text file");
-                Payload::Text(text)
+                Payload::Text(match std::fs::read_to_string(&path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        process::exit(1);
+                    }
+                })
             }
         }
     };

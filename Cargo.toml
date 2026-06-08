@@ -1,6 +1,6 @@
 [package]
 name = "lifter"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2024"
 description = "Serverless file sharing for maximum security"
 readme = "README.md"
@@ -10,11 +10,14 @@ keywords = ["network", "file-sharing", "files", "transfer"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-warp = { version = "0.4.3", features = ["server"] }
+axum = "0.8.9"
+tokio-util = { version = "0.7.18", features = ["io"] }
 tokio = { version = "1.52.3", features = ["full"] }
 rand = "0.10.1"
 bore-cli = "0.6.0"
 clap = { version = "4.6.1", features = ["derive"] }
+futures-util = "0.3.32"
+async-stream = "0.3.6"
 
 [[bin]]
 name = "lift"
