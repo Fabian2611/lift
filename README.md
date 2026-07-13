@@ -129,6 +129,13 @@ You will receive a link like `http://192.168.178.114:42567/HK8pETVE`.
 
 When encountering bugs, please file an issue with the output of the following commands attached:
 
+### Known Issues
+
+`Bore failed. Last error: could not connect to bore.pub:7835`
+
+This usually means outbound traffic on port 7835 is blocked by a firewall/VPN.
+Try -l for local mode, or a different network.
+
 ```
 $ nc -zv bore.pub 7835
 
