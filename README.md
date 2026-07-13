@@ -125,6 +125,16 @@ If you don't want to use an external redirection server, you can use the [-l]oca
 your LAN, making it unreachable from the outside, ensuring noone outside your network will ever have access to it.
 You will receive a link like `http://192.168.178.114:42567/HK8pETVE`.
 
+## Bugs
+
+When encountering bugs, please file an issue with the output of the following commands attached:
+
+```
+$ nc -zv bore.pub 7835
+
+$ nslookup bore.pub
+```
+
 ## Build
 
 The MSRV for `lift` is Rust 1.95.0 due to the use of a previously unstable API. You can also use an older Rust nightly
