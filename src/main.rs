@@ -104,9 +104,29 @@ async fn serve(
     let display_addr = if local {
         format!("{}:{}", local_ip(), local_port)
     } else {
-        let client = Client::new("localhost", local_port, &bore_remote, 0, None)
-            .await
-            .expect("Failed to create bore");
+        let mut succeeded = false;
+        let mut client: Option<Client> = None;
+        let mut err: Option<anyhow::Error> = None;
+        for _ in 0..3
+        {
+             match Client::new("localhost", local_port, &bore_remote, 0, None).await {
+                 Ok(c) => {
+                     succeeded = true;
+                     client = Some(c);
+                     break;
+                 }
+                 Err(e) => {
+                     println!("Establishing bore failed.");
+                     err = Some(e);
+                 }
+             }
+        };
+        if !succeeded {
+            eprintln!("Bore failed. Last error: {}", err.unwrap());
+            process::exit(1);
+        }
+
+        let client = client.unwrap();
         let remote_port = client.remote_port();
         tokio::spawn(async move { client.listen().await });
         format!("{}:{}", bore_remote, remote_port)

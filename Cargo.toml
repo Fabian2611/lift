@@ -1,6 +1,6 @@
 [package]
 name = "lifter"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2024"
 description = "Serverless file sharing for maximum security"
 readme = "README.md"
@@ -19,6 +19,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 futures-util = "0.3.32"
 async-stream = "0.3.6"
 age = { version = "0.11.3", features = ["armor"] }
+anyhow = "1.0.103"
 
 [[bin]]
 name = "lift"
