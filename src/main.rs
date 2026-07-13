@@ -13,7 +13,7 @@ use bore_cli::client::Client;
 use clap::Parser;
 use futures_util::StreamExt;
 use rand::distr::SampleString;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::process;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -27,6 +27,10 @@ struct Args {
     /// Transfer the target as a downloadable file instead of rendering as HTML/text
     #[arg(short = 'f')]
     file_mode: bool,
+
+    /// Do not use a remote bore server
+    #[arg(short = 'l')]
+    local_mode: bool,
 
     /// The path to the file to share. If omitted, reads text from stdin
     #[arg(value_name = "FILENAME")]
@@ -58,6 +62,11 @@ struct Args {
         default_value = "bore.pub"
     )]
     bore_remote: String,
+
+    /// Encrypt with a certain passphrase, or a random one if not specified
+    #[arg(value_name = "PASSPHRASE", short = 'p', long = "passphrase", num_args = 0..=1, default_missing_value = ""
+    )]
+    passphrase: Option<String>,
 }
 
 enum Payload {
@@ -69,17 +78,39 @@ fn random_path() -> String {
     rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 8)
 }
 
-async fn serve(payload: Payload, max_count: u32, max_seconds: u64, bore_remote: String) {
+fn local_ip() -> String {
+    use std::net::UdpSocket;
+    UdpSocket::bind("0.0.0.0:0")
+        .and_then(|socket| {
+            socket.connect("8.8.8.8:80")?;
+            socket.local_addr()
+        })
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_else(|_| "0.0.0.0".to_string())
+}
+
+async fn serve(
+    payload: Payload,
+    max_count: u32,
+    max_seconds: u64,
+    bore_remote: String,
+    local: bool,
+) {
     let r = random_path();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let local_port = listener.local_addr().unwrap().port();
 
-    let client = Client::new("localhost", local_port, &bore_remote, 0, None)
-        .await
-        .expect("Failed to create bore");
-    let remote_port = client.remote_port();
-    tokio::spawn(async move { client.listen().await });
+    let display_addr = if local {
+        format!("{}:{}", local_ip(), local_port)
+    } else {
+        let client = Client::new("localhost", local_port, &bore_remote, 0, None)
+            .await
+            .expect("Failed to create bore");
+        let remote_port = client.remote_port();
+        tokio::spawn(async move { client.listen().await });
+        format!("{}:{}", bore_remote, remote_port)
+    };
 
     let shutdown = Arc::new(Notify::new());
     let counter = Arc::new(AtomicU32::new(max_count));
@@ -152,10 +183,7 @@ async fn serve(payload: Payload, max_count: u32, max_seconds: u64, bore_remote: 
         }),
     );
 
-    println!(
-        "Data available at http://{}:{}/{}",
-        bore_remote, remote_port, r
-    );
+    println!("Data available at http://{}/{}", display_addr, r);
 
     if max_seconds > 0 {
         println!(
@@ -194,6 +222,20 @@ async fn serve(payload: Payload, max_count: u32, max_seconds: u64, bore_remote: 
     println!("Transfer complete, closing remote.");
 }
 
+fn encrypt_bytes_with_passphrase(data: &[u8], passphrase: &str) -> Vec<u8> {
+    let secret = age::secrecy::SecretString::from(passphrase.to_string());
+    let encryptor = age::Encryptor::with_user_passphrase(secret);
+
+    let mut encrypted = Vec::new();
+    let mut writer = encryptor
+        .wrap_output(&mut encrypted)
+        .expect("Failed to start encryption");
+    writer.write_all(data).expect("Failed to encrypt data");
+    writer.finish().expect("Failed to finalize encryption");
+
+    encrypted
+}
+
 fn from_stdin() -> String {
     let mut s = String::new();
     std::io::stdin()
@@ -205,6 +247,20 @@ fn from_stdin() -> String {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
+    let passphrase: Option<String> = match args.passphrase {
+        Some(p) if !p.is_empty() => Some(p),
+        Some(_) => {
+            let generated = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 16);
+            println!("Generated passphrase: {}", generated);
+            println!(
+                "Share this with the receiver. \
+                They can decrypt the file using 'age -d -p -o the_file.sth the_file.sth.age'."
+            );
+            Some(generated)
+        }
+        None => None,
+    };
 
     let payload = match args.filename {
         None => {
@@ -242,5 +298,33 @@ async fn main() {
         }
     };
 
-    serve(payload, args.max_count, args.max_time, args.bore_remote).await;
+    let payload = if let Some(pass) = &passphrase {
+        match payload {
+            Payload::Text(text) => {
+                let encrypted = encrypt_bytes_with_passphrase(text.as_bytes(), pass);
+                Payload::File {
+                    bytes: encrypted,
+                    filename: "message.txt.age".to_string(),
+                }
+            }
+            Payload::File { bytes, filename } => {
+                let encrypted = encrypt_bytes_with_passphrase(&bytes, pass);
+                Payload::File {
+                    bytes: encrypted,
+                    filename: format!("{}.age", filename),
+                }
+            }
+        }
+    } else {
+        payload
+    };
+
+    serve(
+        payload,
+        args.max_count,
+        args.max_time,
+        args.bore_remote,
+        args.local_mode,
+    )
+    .await;
 }

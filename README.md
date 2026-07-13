@@ -4,9 +4,11 @@ A simple CLI-tool to share data quickly, without needing to trust external serve
 
 The only outside connection made is to [bore.pub](https://github.com/ekzhang/bore), which provides a tunnel to your
 machine, so that you don't have to keep any ports permanently open. Neither bore nor any other server will ever have a
-copy of your data.
+copy of your data. If you still wanna be extra sure, lift gives you the option to encrypt your files before sending
+them.
 
 Only the sender needs to install `lift` - the receiver can access it from a normal URL, directly in their web browser.
+The receiver will need to have [age](https://github.com/filosottile/age) installed in order to decrypt encrypted files.
 
 ## Showcase
 
@@ -41,10 +43,13 @@ Usage: `lift [OPTIONS] [FILENAME]`
 The available options are:
 
 * `-f` - file mode
+* `-l` - [local mode](#local-mode)
 * `-c, --count <MAX_COUNT>` - how often the link may be accessed before it expires [default: 1]
 * `-t, --time <TIMEOUT>` - the time in seconds after which the link expires [default: 0 / never]
 * `-r, --remote <REMOTE>` - the bore remote to use [default: "bore.pub"]
-
+* `-p, --passphrase [<PASSPHRASE>]` - the passphrase to
+  use [default: no encryption, if present but <PASSPHRASE> not specified: random passphrase]
+  
 By default, `lift` reads from standard input. This means you can run it without any parameters like so:
 
 ```
@@ -92,6 +97,19 @@ $ lift -c 2 -t 120 -r "bore.pub" -f panda.png
 This will host `panda.png` as a downloadable file, which can be downloaded a maximum of two times and will expire after
 2 minutes (120 seconds). The bore tunnel will be the "bore.pub" server.
 
+## Encryption
+
+`lift` now also supports encryption! This means, you can run:
+
+```
+$ lift -c 2 -t 120 -r "bore.pub" -f panda.png -p secret_password!
+```
+
+This command will work as normal, except that the receiver of your file will receive a file named `panda.png.age`,
+which they will need to decrypt using `age -d -o panda.png panda.png.age` and entering `secret_password!` when prompted.
+
+You can [get age here](https://github.com/filosottile/age).
+
 ## Bore
 
 The only thing bore does is bypass your firewall to open up a port on your machine, so it can be accessed remotely.
@@ -101,13 +119,15 @@ webserver on port `<PORT>`. The command will give you a URL, e.g. `bore.pub:8993
 traffic to `<your machine>:<PORT>`. `lift` additionally sets up the timeout and access counting for you - so you can
 make sure scrapers have no time to find your data.
 
+### Local Mode
+
+If you don't want to use an external redirection server, you can use the [-l]ocal flag. This will host the file within
+your LAN, making it unreachable from the outside, ensuring noone outside your network will ever have access to it.
+You will receive a link like `http://192.168.178.114:42567/HK8pETVE`.
+
 ## Build
 
 `lift` is written in Rust 1.94.1, although the MSRV (minimum supported rust version) is likely way lower.
-It depends on the [axum](https://crates.io/crates/axum), [tokio](https://crates.io/crates/tokio),
-[tokio-util](https://crates.io/crates/tokio-util), [rand](https://crates.io/crates/rand),
-[bore-cli](https://crates.io/crates/bore-cli), [clap](https://crates.io/crates/clap),
-[futures-util](https://crates.io/crates/futures-util) and [async-stream](https://crates.io/crates/async-stream) crates.
 You need to have [Rust](https://rust-lang.org) installed on your system in order to build `lift`.
 
 To build `lift` yourself, clone this repository, then run `cargo build --release`. Your resulting binary will be located
