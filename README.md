@@ -127,7 +127,7 @@ You will receive a link like `http://192.168.178.114:42567/HK8pETVE`.
 
 ## Build
 
-`lift` is written in Rust 1.94.1, although the MSRV (minimum supported rust version) is likely way lower.
+The MSRV for `lift` is Rust 1.95.0 due to the use of an unstable API.
 You need to have [Rust](https://rust-lang.org) installed on your system in order to build `lift`.
 
 To build `lift` yourself, clone this repository, then run `cargo build --release`. Your resulting binary will be located
